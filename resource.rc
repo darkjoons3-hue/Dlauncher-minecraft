@@ -1,0 +1,4 @@
+#include <windows.h>
+
+// IDR_DLAUNCHER - это ID нашего файла лаунчера, который мы запакуем внутрь
+IDR_DLAUNCHER RCDATA "Dlauncher.exe"
