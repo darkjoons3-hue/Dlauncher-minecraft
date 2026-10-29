@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <string>
@@ -99,7 +100,7 @@ bool ExtractResource(int resId, const std::wstring& outPath) {
     return (written == size);
 }
 
-// Процесс установки (в отдельном потоке, чтобы окно не зависало)
+// Процесс установки (в отдельном потоке)
 DWORD WINAPI InstallThread(LPVOID) {
     Sleep(500);
     g_progress = 10; InvalidateRect(g_hWnd, nullptr, FALSE);
@@ -311,13 +312,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     wc.hbrBackground = nullptr;
     RegisterClassW(&wc);
 
-    // Создаем окно (фиксированный размер)
+    // Создаем окно
     int w = 600, h = 360;
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
     
     // Убираем стандартную рамку и заголовок для стиля
-    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU; // Если хочешь совсем без рамки, убери WS_CAPTION
+    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU; 
     g_hWnd = CreateWindowExW(0, L"SetupWnd", L"Dlauncher Setup", style, (sw-w)/2, (sh-h)/2, w, h, nullptr, nullptr, hInst, nullptr);
     
     ShowWindow(g_hWnd, SW_SHOW);
