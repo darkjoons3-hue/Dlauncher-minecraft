@@ -9,22 +9,22 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         
-      # 1. Сначала собираем сам лаунчер
+      # 1. Собираем лаунчер (добавлен urlmon.lib)
       - name: Compile Dlauncher
         run: |
-          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Dlauncher.cpp /Fe:Dlauncher.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib advapi32.lib
+          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Dlauncher.cpp /Fe:Dlauncher.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib advapi32.lib urlmon.lib
           
-      # 2. Затем компилируем ресурсы (он найдет Dlauncher.exe, который создался на прошлом шаге)
+      # 2. Компилируем ресурсы (вшиваем свежий Dlauncher.exe внутрь установщика)
       - name: Compile Resources
         run: |
           rc resource.rc
           
-      # 3. Собираем сам установщик
+      # 3. Собираем установщик
       - name: Compile Installer
         run: |
           cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Installer.cpp resource.res /Fe:DlauncherSetup.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib advapi32.lib
           
-      # 4. Скачиваем и готовый лаунчер, и готовый установщик
+      # 4. Выкладываем готовые файлы
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
