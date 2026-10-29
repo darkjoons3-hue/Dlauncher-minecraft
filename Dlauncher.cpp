@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <urlmon.h> // Для скачивания файлов
+#include <shlobj.h>
 #include <string>
 #include <vector>
 #include <cstdio>
