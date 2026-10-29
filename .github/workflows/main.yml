@@ -10,7 +10,7 @@ jobs:
       - name: Compile Installer
         run: |
           rc resource.rc
-          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Installer.cpp resource.res /Fe:DlauncherSetup.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib
+          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Installer.cpp resource.res /Fe:DlauncherSetup.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib advapi32.lib
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
