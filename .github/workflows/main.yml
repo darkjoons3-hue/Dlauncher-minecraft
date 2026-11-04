@@ -1,30 +1,35 @@
-name: Build Dlauncher & Installer
-on: [push, workflow_dispatch]
+name: Build Dlauncher
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # Позволяет запускать сборку вручную кнопкой
+
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+    
+    - name: Setup MSVC (Компилятор C++)
+      uses: ilammy/msvc-dev-cmd@v1
       
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+    - name: Compile Dlauncher.exe
+      run: |
+        cl.exe /EHsc /O2 /MT /utf-8 /D_UNICODE /DUNICODE Dlauncher.cpp /link /SUBSYSTEM:WINDOWS /OUT:Dlauncher.exe user32.lib gdi32.lib shell32.lib urlmon.lib gdiplus.lib advapi32.lib
         
-      - name: Compile Dlauncher
-        run: |
-          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Dlauncher.cpp /Fe:Dlauncher.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib advapi32.lib urlmon.lib gdiplus.lib
-          
-      - name: Compile Resources
-        run: |
-          rc resource.rc
-          
-      - name: Compile Installer
-        run: |
-          cl /nologo /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE Installer.cpp resource.res /Fe:DlauncherSetup.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib advapi32.lib
-          
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Dlauncher_Build
-          path: |
-            Dlauncher.exe
-            DlauncherSetup.exe
+    - name: Compile Installer.exe
+      run: |
+        rc.exe resource.rc
+        cl.exe /EHsc /O2 /MT /utf-8 /D_UNICODE /DUNICODE Installer.cpp resource.res /link /SUBSYSTEM:WINDOWS /OUT:Installer.exe user32.lib gdi32.lib shell32.lib ole32.lib advapi32.lib
+        
+    - name: Upload Artifacts (Скачивание готовых EXE)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Dlauncher-Release
+        path: |
+          Dlauncher.exe
+          Installer.exe
