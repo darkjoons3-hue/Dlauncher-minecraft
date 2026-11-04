@@ -3,7 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
-#include <mmsystem.h>
+#include <mmsystem.h> // Для PlaySoundW
 #include <shellapi.h>
 #include <urlmon.h>
 #include <shlobj.h>
@@ -365,7 +365,7 @@ void RunSilentMode() {
 }
 
 // ============================================================
-// UI ЛАУНЧЕРА (Код UI не менялся, оставляю как было)
+// UI ЛАУНЧЕРА
 // ============================================================
 void FillRectC(HDC dc, RECT rc, COLORREF c) { HBRUSH b = CreateSolidBrush(c); FillRect(dc, &rc, b); DeleteObject(b); }
 void DrawTextCentered(HDC dc, const wchar_t* t, RECT rc, COLORREF c, int fs, bool b) {
