@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#include <mmsystem.h>
 #include <shellapi.h>
 #include <urlmon.h>
 #include <shlobj.h>
@@ -15,6 +16,7 @@
 #include <cwchar>
 #include <cstdlib>
 
+#pragma comment(lib, "winm.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "shell32.lib")
