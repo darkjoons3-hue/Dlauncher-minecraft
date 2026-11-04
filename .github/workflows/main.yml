@@ -19,7 +19,7 @@ jobs:
       
     - name: Compile Dlauncher.exe
       run: |
-        cl.exe /EHsc /O2 /MT /utf-8 /D_UNICODE /DUNICODE Dlauncher.cpp /link /SUBSYSTEM:WINDOWS /OUT:Dlauncher.exe user32.lib gdi32.lib shell32.lib urlmon.lib gdiplus.lib advapi32.lib winm.lib      
+        cl.exe /EHsc /O2 /MT /utf-8 /D_UNICODE /DUNICODE Dlauncher.cpp /link /SUBSYSTEM:WINDOWS /OUT:Dlauncher.exe user32.lib gdi32.lib shell32.lib urlmon.lib gdiplus.lib advapi32.lib winmm.lib      
     - name: Compile Installer.exe
       run: |
         rc.exe resource.rc
